@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { AppData, We0, Destination, We0PresetType, FileExt, ViewType } from '@/lib/types';
-import { WE0_TYPES, FILE_EXTS } from '@/lib/types';
+import type { AppData, We0, Co2, Destination, We0PresetType, FileExt, ViewType } from '@/lib/types';
+import { WE0_TYPES, CO2_PRESETS, FILE_EXTS } from '@/lib/types';
 import { generateFilename, generatePassword, loadExistingPasswords } from '@/lib/generators';
 import { loadData, saveData } from '@/lib/storage';
 import { exportTXT, importTXT, exportCSV, importCSV, exportXLSX, importXLSX, detectFormat, downloadFile, mergeData } from '@/lib/formats';
@@ -16,19 +16,23 @@ export default function Home() {
   const initRef = useRef(false);
   const [view, setView] = useState<ViewType>('main');
   const [selWe0, setSelWe0] = useState('');
+  const [selCo2, setSelCo2] = useState('');
   const [editIdx, setEditIdx] = useState(-1);
   const [toast, setToast] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState('');
   const [revealedPw, setRevealedPw] = useState<Set<string>>(new Set());
 
-  // flash state
+  // flash
   const [flashOpen, setFlashOpen] = useState(false);
   const [flashInput, setFlashInput] = useState('');
 
-  // create form
+  // create we0 form
   const [cName, setCName] = useState('');
   const [cType, setCType] = useState<We0PresetType>('person');
   const [cCustom, setCCustom] = useState('');
+
+  // create co2 form
+  const [kName, setKName] = useState('');
 
   // entry form
   const [fFn, setFFn] = useState('');
@@ -47,9 +51,9 @@ export default function Home() {
     if (initRef.current) return;
     initRef.current = true;
     const d = loadData();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- loading persisted state from localStorage on mount
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(d);
-    loadExistingPasswords(d.we0s.flatMap(w => w.cells.map(c => c.password)));
+    loadExistingPasswords(d.we0s.flatMap(w => w.co2s.flatMap(k => k.cells.map(c => c.password))));
   }, []);
 
   useEffect(() => {
@@ -68,8 +72,11 @@ export default function Home() {
   }, []);
 
   const goBack = useCallback(() => {
-    if (view === 'create' || view === 'detail') setView('main');
-    else setView('detail');
+    if (view === 'create') setView('main');
+    else if (view === 'detail') setView('main');
+    else if (view === 'co2-create') setView('detail');
+    else if (view === 'co2-detail') setView('detail');
+    else if (view === 'add' || view === 'edit') setView('co2-detail');
     setConfirmDel('');
   }, [view]);
 
@@ -85,14 +92,12 @@ export default function Home() {
   }, [data]);
 
   const curWe0 = useMemo(() => data.we0s.find(w => w.name === selWe0), [data, selWe0]);
+  const curCo2 = useMemo(() => curWe0?.co2s.find(c => c.name === selCo2), [curWe0, selCo2]);
 
-  // === HANDLERS ===
+  // === WE0 HANDLERS ===
   const openWe0 = (name: string) => { setSelWe0(name); setView('detail'); setConfirmDel(''); };
 
-  const goCreate = () => {
-    setCName(''); setCType('person'); setCCustom('');
-    setView('create');
-  };
+  const goCreate = () => { setCName(''); setCType('person'); setCCustom(''); setView('create'); };
 
   const createWe0 = () => {
     const name = cName.trim();
@@ -100,7 +105,7 @@ export default function Home() {
     if (data.we0s.some(w => w.name === name)) { showToast('name exists'); return; }
     const type = cType === 'custom' ? cCustom.trim() : cType;
     if (!type) { showToast('enter type name'); return; }
-    setData(prev => ({ we0s: [...prev.we0s, { name, type, cells: [] }] }));
+    setData(prev => ({ we0s: [...prev.we0s, { name, type, co2s: [] }] }));
     showToast('created');
     goBack();
   };
@@ -111,6 +116,42 @@ export default function Home() {
     setView('main'); setConfirmDel('');
   };
 
+  // === CO2 HANDLERS ===
+  const openCo2 = (name: string) => { setSelCo2(name); setView('co2-detail'); setConfirmDel(''); };
+
+  const goCreateCo2 = () => { setKName(''); setView('co2-create'); };
+
+  const createCo2Preset = (name: string) => {
+    if (!curWe0) return;
+    if (curWe0.co2s.some(k => k.name === name)) { showToast('name exists'); return; }
+    setData(prev => ({
+      we0s: prev.we0s.map(w => {
+        if (w.name !== selWe0) return w;
+        return { ...w, co2s: [...w.co2s, { name, cells: [] }] };
+      })
+    }));
+    showToast('created');
+  };
+
+  const createCo2 = () => {
+    const name = kName.trim();
+    if (!name) { showToast('enter a name'); return; }
+    createCo2Preset(name);
+    goBack();
+  };
+
+  const deleteCo2 = () => {
+    setData(prev => ({
+      we0s: prev.we0s.map(w => {
+        if (w.name !== selWe0) return w;
+        return { ...w, co2s: w.co2s.filter(k => k.name !== selCo2) };
+      })
+    }));
+    showToast('deleted');
+    setView('detail'); setConfirmDel('');
+  };
+
+  // === CELL HANDLERS ===
   const goAdd = () => {
     setFFn(generateFilename('7z'));
     setFExt('7z');
@@ -123,7 +164,7 @@ export default function Home() {
   };
 
   const goEdit = (idx: number) => {
-    const cell = curWe0?.cells[idx];
+    const cell = curCo2?.cells[idx];
     if (!cell) return;
     setFFn(cell.filename);
     setFExt(cell.filename.endsWith('.zip') ? 'zip' : '7z');
@@ -148,21 +189,33 @@ export default function Home() {
     setData(prev => ({
       we0s: prev.we0s.map(w => {
         if (w.name !== selWe0) return w;
-        const cells = [...w.cells];
-        if (editIdx >= 0) cells[editIdx] = cell;
-        else cells.push(cell);
-        return { ...w, cells };
+        return {
+          ...w,
+          co2s: w.co2s.map(k => {
+            if (k.name !== selCo2) return k;
+            const cells = [...k.cells];
+            if (editIdx >= 0) cells[editIdx] = cell;
+            else cells.push(cell);
+            return { ...k, cells };
+          })
+        };
       })
     }));
     showToast(editIdx >= 0 ? 'updated' : 'added');
-    setView('detail');
+    setView('co2-detail');
   };
 
   const deleteCell = (idx: number) => {
     setData(prev => ({
       we0s: prev.we0s.map(w => {
         if (w.name !== selWe0) return w;
-        return { ...w, cells: w.cells.filter((_, i) => i !== idx) };
+        return {
+          ...w,
+          co2s: w.co2s.map(k => {
+            if (k.name !== selCo2) return k;
+            return { ...k, cells: k.cells.filter((_, i) => i !== idx) };
+          })
+        };
       })
     }));
     showToast('deleted');
@@ -177,45 +230,22 @@ export default function Home() {
     });
   };
 
-  const copyPw = (pw: string) => {
-    navigator.clipboard.writeText(pw).then(() => showToast('copied'));
-  };
+  const copyPw = (pw: string) => { navigator.clipboard.writeText(pw).then(() => showToast('copied')); };
 
   const genFn = () => { setFFn(generateFilename(fExt)); };
   const genPw = () => { setFPw(generatePassword()); setFShowPw(false); };
 
-  const addDest = () => {
-    if (fDests.length >= 4) return;
-    setFDests(prev => [...prev, { storageType: 'sd card', folderPath: '' }]);
-  };
-
-  const removeDest = (i: number) => {
-    setFDests(prev => prev.filter((_, idx) => idx !== i));
-  };
-
-  const updateDest = (i: number, key: keyof Destination, val: string) => {
-    setFDests(prev => prev.map((d, idx) => idx === i ? { ...d, [key]: val } : d));
-  };
+  const addDest = () => { if (fDests.length >= 4) return; setFDests(prev => [...prev, { storageType: 'sd card', folderPath: '' }]); };
+  const removeDest = (i: number) => { setFDests(prev => prev.filter((_, idx) => idx !== i)); };
+  const updateDest = (i: number, key: keyof Destination, val: string) => { setFDests(prev => prev.map((d, idx) => idx === i ? { ...d, [key]: val } : d)); };
 
   // === FLASH ===
-  const openFlash = () => {
-    setFlashOpen(true);
-    setFlashInput('');
-  };
-
-  const cancelFlash = () => {
-    setFlashOpen(false);
-    setFlashInput('');
-  };
-
+  const openFlash = () => { setFlashOpen(true); setFlashInput(''); };
+  const cancelFlash = () => { setFlashOpen(false); setFlashInput(''); };
   const executeFlash = () => {
-    if (flashInput.trim().toLowerCase() !== FLASH_CONFIRM_TEXT) {
-      showToast('type exactly: ' + FLASH_CONFIRM_TEXT);
-      return;
-    }
+    if (flashInput.trim().toLowerCase() !== FLASH_CONFIRM_TEXT) { showToast('type exactly: ' + FLASH_CONFIRM_TEXT); return; }
     setData({ we0s: [] });
-    setFlashOpen(false);
-    setFlashInput('');
+    setFlashOpen(false); setFlashInput('');
     setView('main');
     showToast('everything flashed');
   };
@@ -258,9 +288,9 @@ export default function Home() {
       } else {
         imported = fmt === 'csv' ? importCSV(text) : importTXT(text);
       }
-      const before = data.we0s.reduce((a, w) => a + w.cells.length, 0);
+      const before = data.we0s.reduce((a, w) => a + w.co2s.reduce((b, k) => b + k.cells.length, 0), 0);
       const merged = mergeData(data, imported);
-      const after = merged.we0s.reduce((a, w) => a + w.cells.length, 0);
+      const after = merged.we0s.reduce((a, w) => a + w.co2s.reduce((b, k) => b + k.cells.length, 0), 0);
       setData(merged);
       showToast(`imported: +${after - before} entries`);
     } catch { showToast('import failed'); }
@@ -301,7 +331,34 @@ export default function Home() {
         </div>
       </div>
     );
-  } else if ((view === 'add' || view === 'edit') && curWe0) {
+  } else if (view === 'co2-create') {
+    content = (
+      <div className="max-w-[640px] mx-auto p-4 md:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <button className="z-link" onClick={goBack}>[&lt;]</button>
+          <span className="text-sm font-medium">create co2</span>
+        </div>
+        <hr className="z-divider" />
+        <div className="mt-4 space-y-4">
+          <div>
+            <div className="z-label">quick create</div>
+            <div className="flex gap-2 flex-wrap">
+              {CO2_PRESETS.map(p => (
+                <button key={p} className="z-btn z-btn-sm" onClick={() => createCo2Preset(p)}>[{p}]</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="z-label">or enter name</div>
+            <div className="flex gap-2">
+              <input className="z-input flex-1 min-w-0" value={kName} onChange={e => setKName(e.target.value)} placeholder="custom category name" autoFocus onKeyDown={e => e.key === 'Enter' && createCo2()} />
+              <button className="z-btn z-btn-sm" onClick={createCo2}>[create]</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  } else if ((view === 'add' || view === 'edit') && curCo2) {
     content = (
       <div className="max-w-[640px] mx-auto p-4 md:p-6">
         <div className="flex items-center gap-3 mb-4">
@@ -360,24 +417,25 @@ export default function Home() {
         </div>
       </div>
     );
-  } else if (view === 'detail' && curWe0) {
+  } else if (view === 'co2-detail' && curCo2) {
     content = (
       <div className="max-w-[640px] mx-auto p-4 md:p-6">
         <div className="flex items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-3 min-w-0">
             <button className="z-link shrink-0" onClick={goBack}>[&lt;]</button>
-            <span className="text-sm font-medium truncate">{curWe0.name}</span>
-            <span className="text-xs shrink-0" style={{ color: 'var(--muted-foreground)' }}>:: {curWe0.type}</span>
+            <span className="text-sm font-medium truncate">{curWe0?.name}</span>
+            <span style={{ color: 'var(--muted-foreground)' }}>/</span>
+            <span className="text-sm font-medium truncate">{curCo2.name}</span>
           </div>
           <div className="flex gap-2 shrink-0">
-            {confirmDel === 'we0' ? (
+            {confirmDel === 'co2' ? (
               <>
                 <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>delete?</span>
-                <button className="z-btn z-btn-sm z-btn-danger" onClick={deleteWe0}>[yes]</button>
+                <button className="z-btn z-btn-sm z-btn-danger" onClick={deleteCo2}>[yes]</button>
                 <button className="z-btn z-btn-sm z-btn-ghost" onClick={() => setConfirmDel('')}>[no]</button>
               </>
             ) : (
-              <button className="z-btn z-btn-sm z-btn-danger" onClick={() => setConfirmDel('we0')}>[del]</button>
+              <button className="z-btn z-btn-sm z-btn-danger" onClick={() => setConfirmDel('co2')}>[del]</button>
             )}
           </div>
         </div>
@@ -385,11 +443,11 @@ export default function Home() {
         <div className="flex gap-2 mt-4 mb-4">
           <button className="z-btn z-btn-sm" onClick={goAdd}>[+add]</button>
         </div>
-        {curWe0.cells.length === 0 ? (
+        {curCo2.cells.length === 0 ? (
           <div className="text-xs" style={{ color: 'var(--muted-foreground)' }}>no entries</div>
         ) : (
           <div className="space-y-3 z-scroll" style={{ maxHeight: 'calc(100vh - 180px)' }}>
-            {curWe0.cells.map((cell, idx) => {
+            {curCo2.cells.map((cell, idx) => {
               const revealed = revealedPw.has(cell.filename);
               return (
                 <div key={cell.filename + idx} className="p-3" style={{ border: '1px solid var(--border)' }}>
@@ -432,6 +490,53 @@ export default function Home() {
         )}
       </div>
     );
+  } else if (view === 'detail' && curWe0) {
+    const totalCells = curWe0.co2s.reduce((a, k) => a + k.cells.length, 0);
+    content = (
+      <div className="max-w-[640px] mx-auto p-4 md:p-6">
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button className="z-link shrink-0" onClick={goBack}>[&lt;]</button>
+            <span className="text-sm font-medium truncate">{curWe0.name}</span>
+            <span className="text-xs shrink-0" style={{ color: 'var(--muted-foreground)' }}>:: {curWe0.type} ({totalCells})</span>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {confirmDel === 'we0' ? (
+              <>
+                <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>delete?</span>
+                <button className="z-btn z-btn-sm z-btn-danger" onClick={deleteWe0}>[yes]</button>
+                <button className="z-btn z-btn-sm z-btn-ghost" onClick={() => setConfirmDel('')}>[no]</button>
+              </>
+            ) : (
+              <button className="z-btn z-btn-sm z-btn-danger" onClick={() => setConfirmDel('we0')}>[del]</button>
+            )}
+          </div>
+        </div>
+        <hr className="z-divider" />
+        <div className="flex gap-2 mt-4 mb-4">
+          <button className="z-btn z-btn-sm" onClick={goCreateCo2}>[+create co2]</button>
+        </div>
+        {curWe0.co2s.length === 0 ? (
+          <div className="text-xs" style={{ color: 'var(--muted-foreground)' }}>no co2s yet</div>
+        ) : (
+          <div className="mt-2 space-y-1 z-scroll" style={{ maxHeight: 'calc(100vh - 200px)' }}>
+            {curWe0.co2s.map(co2 => (
+              <div key={co2.name} className="z-link text-sm py-1 cursor-pointer flex items-center justify-between" onClick={() => openCo2(co2.name)}>
+                <span>[/] {co2.name} ({co2.cells.length})</span>
+                {confirmDel === `co2-${co2.name}` ? (
+                  <span className="flex gap-1" onClick={e => e.stopPropagation()}>
+                    <button className="z-btn z-btn-sm z-btn-danger" onClick={() => { setSelCo2(co2.name); deleteCo2(); }}>[yes]</button>
+                    <button className="z-btn z-btn-sm z-btn-ghost" onClick={() => setConfirmDel('')}>[no]</button>
+                  </span>
+                ) : (
+                  <button className="z-btn z-btn-sm z-btn-danger" onClick={e => { e.stopPropagation(); setConfirmDel(`co2-${co2.name}`); }}>[del]</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   } else {
     // MAIN VIEW
     content = (
@@ -448,7 +553,6 @@ export default function Home() {
         </div>
         <hr className="z-divider" />
 
-        {/* flash section */}
         {flashOpen ? (
           <div className="mt-4 p-3" style={{ border: '1px solid #c33' }}>
             <div className="z-label" style={{ color: '#c33' }}>/flash/</div>
@@ -457,25 +561,8 @@ export default function Home() {
               type <span className="font-mono" style={{ color: '#c33' }}>&quot;{FLASH_CONFIRM_TEXT}&quot;</span> to confirm.
             </div>
             <div className="flex gap-2 items-center">
-              <input
-                ref={flashRef}
-                className="z-input flex-1 min-w-0"
-                value={flashInput}
-                onChange={e => setFlashInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') executeFlash();
-                  if (e.key === 'Escape') cancelFlash();
-                }}
-                placeholder={FLASH_CONFIRM_TEXT}
-              />
-              <button
-                className="z-btn z-btn-sm z-btn-danger"
-                onClick={executeFlash}
-                disabled={flashInput.trim().toLowerCase() !== FLASH_CONFIRM_TEXT}
-                style={{ opacity: flashInput.trim().toLowerCase() === FLASH_CONFIRM_TEXT ? 1 : 0.4 }}
-              >
-                [flash]
-              </button>
+              <input ref={flashRef} className="z-input flex-1 min-w-0" value={flashInput} onChange={e => setFlashInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') executeFlash(); if (e.key === 'Escape') cancelFlash(); }} placeholder={FLASH_CONFIRM_TEXT} />
+              <button className="z-btn z-btn-sm z-btn-danger" onClick={executeFlash} disabled={flashInput.trim().toLowerCase() !== FLASH_CONFIRM_TEXT} style={{ opacity: flashInput.trim().toLowerCase() === FLASH_CONFIRM_TEXT ? 1 : 0.4 }}>[flash]</button>
               <button className="z-btn z-btn-sm z-btn-ghost" onClick={cancelFlash}>[cancel]</button>
             </div>
           </div>
@@ -495,11 +582,14 @@ export default function Home() {
             {grouped.order.map(type => (
               <div key={type}>
                 <div className="text-xs font-medium mb-1" style={{ color: 'var(--muted-foreground)' }}>/{type}/</div>
-                {grouped.map[type].map(we0 => (
-                  <div key={we0.name} className="z-link text-sm py-1 cursor-pointer" onClick={() => openWe0(we0.name)}>
-                    [/] {we0.name} ({we0.cells.length})
-                  </div>
-                ))}
+                {grouped.map[type].map(we0 => {
+                  const total = we0.co2s.reduce((a, k) => a + k.cells.length, 0);
+                  return (
+                    <div key={we0.name} className="z-link text-sm py-1 cursor-pointer" onClick={() => openWe0(we0.name)}>
+                      [/] {we0.name} ({total})
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>

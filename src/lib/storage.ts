@@ -60,13 +60,37 @@ function decodeDest(s: string): { storageType: string; folderPath: string } {
   return { storageType: unesc(s.substring(0, idx)), folderPath: unesc(s.substring(idx + 1)) };
 }
 
+function splitLine(line: string, startIdx: number): string[] {
+  const parts: string[] = [];
+  let cur = '';
+  let j = startIdx;
+  while (j < line.length) {
+    if (line[j] === '\\' && j + 1 < line.length && (line[j+1] === '\\' || line[j+1] === '|' || line[j+1] === ';')) {
+      cur += line[j] + line[j+1];
+      j += 2;
+    } else if (line[j] === '|') {
+      parts.push(cur);
+      cur = '';
+      j++;
+    } else {
+      cur += line[j];
+      j++;
+    }
+  }
+  parts.push(cur);
+  return parts;
+}
+
 export function dataToText(data: AppData): string {
   const lines: string[] = [];
   for (const w of data.we0s) {
     lines.push(`W|${esc(w.name)}|${esc(w.type)}`);
-    for (const c of w.cells) {
-      const dests = c.destinations.map(encodeDest).join(';');
-      lines.push(`C|${esc(w.name)}|${esc(c.filename)}|${esc(c.password)}|${esc(c.description)}|${dests}`);
+    for (const k of w.co2s) {
+      lines.push(`K|${esc(w.name)}|${esc(k.name)}`);
+      for (const c of k.cells) {
+        const dests = c.destinations.map(encodeDest).join(';');
+        lines.push(`C|${esc(w.name)}|${esc(k.name)}|${esc(c.filename)}|${esc(c.password)}|${esc(c.description)}|${dests}`);
+      }
     }
   }
   return lines.join('\n');
@@ -75,6 +99,7 @@ export function dataToText(data: AppData): string {
 export function textToData(text: string): AppData {
   const data: AppData = { we0s: [] };
   const we0Map = new Map<string, AppData['we0s'][number]>();
+  const co2Map = new Map<string, AppData['we0s'][number]['co2s'][number]>();
   const passwords: string[] = [];
 
   const lines = text.split('\n');
@@ -83,46 +108,38 @@ export function textToData(text: string): AppData {
     if (!line.trim()) continue;
 
     const marker = line.substring(0, 2);
-    if (marker !== 'W|' && marker !== 'C|') continue;
+    if (marker !== 'W|' && marker !== 'K|' && marker !== 'C|') continue;
 
-    // split on unescaped | only
-    const parts: string[] = [];
-    let cur = '';
-    let j = 2; // skip marker
-    while (j < line.length) {
-      if (line[j] === '\\' && j + 1 < line.length && (line[j+1] === '\\' || line[j+1] === '|' || line[j+1] === ';')) {
-        cur += line[j] + line[j+1];
-        j += 2;
-      } else if (line[j] === '|') {
-        parts.push(cur);
-        cur = '';
-        j++;
-      } else {
-        cur += line[j];
-        j++;
-      }
-    }
-    parts.push(cur);
+    const parts = splitLine(line, 2);
 
     if (marker === 'W|' && parts.length >= 2) {
       const name = unesc(parts[0]);
       const type = unesc(parts[1]);
-      const we0 = { name, type, cells: [] };
+      const we0 = { name, type, co2s: [] };
       data.we0s.push(we0);
       we0Map.set(name, we0);
-    } else if (marker === 'C|' && parts.length >= 2) {
+    } else if (marker === 'K|' && parts.length >= 2) {
       const parentName = unesc(parts[0]);
       const we0 = we0Map.get(parentName);
       if (we0) {
-        const filename = unesc(parts[1] || '');
-        const password = unesc(parts[2] || '');
-        const description = unesc(parts[3] || '');
-        const destStr = parts[4] || '';
+        const co2 = { name: unesc(parts[1]), cells: [] };
+        we0.co2s.push(co2);
+        co2Map.set(`${parentName}::${co2.name}`, co2);
+      }
+    } else if (marker === 'C|' && parts.length >= 3) {
+      const parentName = unesc(parts[0]);
+      const co2Name = unesc(parts[1]);
+      const co2 = co2Map.get(`${parentName}::${co2Name}`);
+      if (co2) {
+        const filename = unesc(parts[2] || '');
+        const password = unesc(parts[3] || '');
+        const description = unesc(parts[4] || '');
+        const destStr = parts[5] || '';
         passwords.push(password);
         const destinations = destStr
           ? splitUnescaped(destStr, ';').map(decodeDest).filter(d => d.storageType)
           : [];
-        we0.cells.push({ filename, password, description, destinations });
+        co2.cells.push({ filename, password, description, destinations });
       }
     }
   }

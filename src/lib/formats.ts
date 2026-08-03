@@ -71,15 +71,22 @@ export function exportTXT(data: AppData): string {
     lines.push(`name:${sanitizeForTxt(w.name)}`);
     lines.push(`type:${sanitizeForTxt(w.type)}`);
     lines.push('');
-    for (const c of w.cells) {
-      lines.push('[C]');
+    for (const k of w.co2s) {
+      lines.push('[K]');
       lines.push(`parent:${sanitizeForTxt(w.name)}`);
-      lines.push(`filename:${sanitizeForTxt(c.filename)}`);
-      lines.push(`password:${sanitizeForTxt(c.password)}`);
-      lines.push(`description:${sanitizeForTxt(c.description)}`);
-      const dests = c.destinations.map(d => `${sanitizeForTxt(d.storageType)}:${sanitizeForTxt(d.folderPath)}`).join(';');
-      lines.push(`destinations:${dests}`);
+      lines.push(`co2:${sanitizeForTxt(k.name)}`);
       lines.push('');
+      for (const c of k.cells) {
+        lines.push('[C]');
+        lines.push(`parent:${sanitizeForTxt(w.name)}`);
+        lines.push(`co2:${sanitizeForTxt(k.name)}`);
+        lines.push(`filename:${sanitizeForTxt(c.filename)}`);
+        lines.push(`password:${sanitizeForTxt(c.password)}`);
+        lines.push(`description:${sanitizeForTxt(c.description)}`);
+        const dests = c.destinations.map(d => `${sanitizeForTxt(d.storageType)}:${sanitizeForTxt(d.folderPath)}`).join(';');
+        lines.push(`destinations:${dests}`);
+        lines.push('');
+      }
     }
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
@@ -93,22 +100,30 @@ export function importTXT(text: string): AppData {
 
   function processBlock() {
     if (blockType === 'W' && fields.name) {
-      const we0: We0 = { name: fields.name, type: fields.type || 'others', cells: [] };
+      const we0: We0 = { name: fields.name, type: fields.type || 'others', co2s: [] };
       data.we0s.push(we0);
       we0Map.set(we0.name, we0);
-    } else if (blockType === 'C' && fields.parent) {
+    } else if (blockType === 'K' && fields.parent && fields.co2) {
       const we0 = we0Map.get(fields.parent);
       if (we0) {
-        const destStr = fields.destinations || '';
-        const destinations = destStr
-          ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
-          : [];
-        we0.cells.push({
-          filename: fields.filename || '',
-          password: fields.password || '',
-          description: fields.description || '',
-          destinations,
-        });
+        we0.co2s.push({ name: fields.co2, cells: [] });
+      }
+    } else if (blockType === 'C' && fields.parent && fields.co2) {
+      const we0 = we0Map.get(fields.parent);
+      if (we0) {
+        const co2 = we0.co2s.find(c => c.name === fields.co2);
+        if (co2) {
+          const destStr = fields.destinations || '';
+          const destinations = destStr
+            ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
+            : [];
+          co2.cells.push({
+            filename: fields.filename || '',
+            password: fields.password || '',
+            description: fields.description || '',
+            destinations,
+          });
+        }
       }
     }
     for (const k in fields) delete fields[k];
@@ -119,6 +134,9 @@ export function importTXT(text: string): AppData {
     if (line === '[W]') {
       processBlock();
       blockType = 'W';
+    } else if (line === '[K]') {
+      processBlock();
+      blockType = 'K';
     } else if (line === '[C]') {
       processBlock();
       blockType = 'C';
@@ -136,7 +154,7 @@ export function importTXT(text: string): AppData {
 
 // --- CSV Export/Import ---
 
-const CSV_HEADER = 'record_type,we0_name,type,filename,password,description,destinations';
+const CSV_HEADER = 'record_type,we0_name,co2_name,type,filename,password,description,destinations';
 
 export function exportCSV(data: AppData): string {
   const rows: string[] = [CSV_HEADER];
@@ -145,21 +163,32 @@ export function exportCSV(data: AppData): string {
     rows.push([
       csvEscape('W'),
       csvEscape(w.name),
+      '',
       csvEscape(w.type),
       '', '', '', '',
     ].join(','));
 
-    for (const c of w.cells) {
-      const dests = c.destinations.map(d => `${d.storageType}:${d.folderPath}`).join(';');
+    for (const k of w.co2s) {
       rows.push([
-        csvEscape('C'),
+        csvEscape('K'),
         csvEscape(w.name),
-        '',
-        csvEscape(c.filename),
-        csvEscape(c.password),
-        csvEscape(c.description),
-        csvEscape(dests),
+        csvEscape(k.name),
+        '', '', '', '', '',
       ].join(','));
+
+      for (const c of k.cells) {
+        const dests = c.destinations.map(d => `${d.storageType}:${d.folderPath}`).join(';');
+        rows.push([
+          csvEscape('C'),
+          csvEscape(w.name),
+          csvEscape(k.name),
+          '',
+          csvEscape(c.filename),
+          csvEscape(c.password),
+          csvEscape(c.description),
+          csvEscape(dests),
+        ].join(','));
+      }
     }
   }
 
@@ -171,58 +200,69 @@ export function importCSV(text: string): AppData {
   const data: AppData = { we0s: [] };
   const we0Map = new Map<string, We0>();
 
-  // detect header format to find column indices
   const header = rows[0] || [];
-  const isNewFormat = header.includes('filename') && header.includes('password');
+  const hasHeader = header.includes('record_type');
 
-  // column index maps for new format
   let colRecordType = 0;
   let colWe0Name = 1;
-  let colType = 2;
-  let colFilename = 3;
-  let colPassword = 4;
-  let colDescription = 5;
-  let colDestinations = 6;
+  let colCo2Name = 2;
+  let colType = 3;
+  let colFilename = 4;
+  let colPassword = 5;
+  let colDescription = 6;
+  let colDestinations = 7;
 
-  if (isNewFormat) {
-    colRecordType = header.indexOf('record_type');
-    colWe0Name = header.indexOf('we0_name');
-    colType = header.indexOf('type');
-    colFilename = header.indexOf('filename');
-    colPassword = header.indexOf('password');
-    colDescription = header.indexOf('description');
-    colDestinations = header.indexOf('destinations');
+  if (hasHeader) {
+    const h = header.map(x => String(x).trim());
+    colRecordType = h.indexOf('record_type');
+    colWe0Name = h.indexOf('we0_name');
+    colCo2Name = h.indexOf('co2_name');
+    colType = h.indexOf('type');
+    colFilename = h.indexOf('filename');
+    colPassword = h.indexOf('password');
+    colDescription = h.indexOf('description');
+    colDestinations = h.indexOf('destinations');
   }
 
-  const startRow = isNewFormat || header[0] === 'record_type' ? 1 : 0;
+  const startRow = hasHeader ? 1 : 0;
 
   for (let i = startRow; i < rows.length; i++) {
     const row = rows[i];
     if (!row || row.length < 2) continue;
 
-    const recordType = row[colRecordType] || '';
+    const recordType = String(row[colRecordType] || '');
 
     if (recordType === 'W') {
       const we0: We0 = {
-        name: row[colWe0Name] || '',
-        type: row[colType] || 'others',
-        cells: [],
+        name: String(row[colWe0Name] || ''),
+        type: String(row[colType] || 'others'),
+        co2s: [],
       };
       data.we0s.push(we0);
       we0Map.set(we0.name, we0);
-    } else if (recordType === 'C') {
-      const we0 = we0Map.get(row[colWe0Name] || '');
+    } else if (recordType === 'K') {
+      const we0 = we0Map.get(String(row[colWe0Name] || ''));
       if (we0) {
-        const destStr = row[colDestinations] || '';
-        const destinations = destStr
-          ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
-          : [];
-        we0.cells.push({
-          filename: row[colFilename] || '',
-          password: row[colPassword] || '',
-          description: row[colDescription] || '',
-          destinations,
-        });
+        const co2Name = String(row[colCo2Name] || '');
+        if (co2Name) we0.co2s.push({ name: co2Name, cells: [] });
+      }
+    } else if (recordType === 'C') {
+      const we0 = we0Map.get(String(row[colWe0Name] || ''));
+      if (we0) {
+        const co2Name = String(row[colCo2Name] || '');
+        const co2 = we0.co2s.find(c => c.name === co2Name);
+        if (co2) {
+          const destStr = String(row[colDestinations] || '');
+          const destinations = destStr
+            ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
+            : [];
+          co2.cells.push({
+            filename: String(row[colFilename] || ''),
+            password: String(row[colPassword] || ''),
+            description: String(row[colDescription] || ''),
+            destinations,
+          });
+        }
       }
     }
   }
@@ -232,7 +272,7 @@ export function importCSV(text: string): AppData {
 
 // --- XLSX Export/Import ---
 
-const XLSX_HEADER = ['record_type', 'we0_name', 'type', 'filename', 'password', 'description', 'destinations'];
+const XLSX_HEADER = ['record_type', 'we0_name', 'co2_name', 'type', 'filename', 'password', 'description', 'destinations'];
 
 export async function exportXLSX(data: AppData): Promise<Blob> {
   const XLSX = await import('xlsx');
@@ -240,10 +280,13 @@ export async function exportXLSX(data: AppData): Promise<Blob> {
   const rows: (string | number)[][] = [XLSX_HEADER];
 
   for (const w of data.we0s) {
-    rows.push(['W', w.name, w.type, '', '', '', '']);
-    for (const c of w.cells) {
-      const dests = c.destinations.map(d => `${d.storageType}:${d.folderPath}`).join(';');
-      rows.push(['C', w.name, '', c.filename, c.password, c.description, dests]);
+    rows.push(['W', w.name, '', w.type, '', '', '', '']);
+    for (const k of w.co2s) {
+      rows.push(['K', w.name, k.name, '', '', '', '', '']);
+      for (const c of k.cells) {
+        const dests = c.destinations.map(d => `${d.storageType}:${d.folderPath}`).join(';');
+        rows.push(['C', w.name, k.name, '', c.filename, c.password, c.description, dests]);
+      }
     }
   }
 
@@ -265,27 +308,30 @@ export async function importXLSX(buffer: ArrayBuffer): Promise<AppData> {
   const we0Map = new Map<string, We0>();
 
   const header = rows[0] || [];
-  const isNewFormat = header.some(h => String(h) === 'filename');
+  const h = header.map(x => String(x).trim());
+  const hasHeader = h.includes('record_type');
 
   let colRecordType = 0;
   let colWe0Name = 1;
-  let colType = 2;
-  let colFilename = 3;
-  let colPassword = 4;
-  let colDescription = 5;
-  let colDestinations = 6;
+  let colCo2Name = 2;
+  let colType = 3;
+  let colFilename = 4;
+  let colPassword = 5;
+  let colDescription = 6;
+  let colDestinations = 7;
 
-  if (isNewFormat) {
-    colRecordType = header.indexOf('record_type');
-    colWe0Name = header.indexOf('we0_name');
-    colType = header.indexOf('type');
-    colFilename = header.indexOf('filename');
-    colPassword = header.indexOf('password');
-    colDescription = header.indexOf('description');
-    colDestinations = header.indexOf('destinations');
+  if (hasHeader) {
+    colRecordType = h.indexOf('record_type');
+    colWe0Name = h.indexOf('we0_name');
+    colCo2Name = h.indexOf('co2_name');
+    colType = h.indexOf('type');
+    colFilename = h.indexOf('filename');
+    colPassword = h.indexOf('password');
+    colDescription = h.indexOf('description');
+    colDestinations = h.indexOf('destinations');
   }
 
-  const startRow = isNewFormat || String(header[0]) === 'record_type' ? 1 : 0;
+  const startRow = hasHeader ? 1 : 0;
 
   for (let i = startRow; i < rows.length; i++) {
     const row = rows[i];
@@ -297,23 +343,33 @@ export async function importXLSX(buffer: ArrayBuffer): Promise<AppData> {
       const we0: We0 = {
         name: String(row[colWe0Name] || ''),
         type: String(row[colType] || 'others'),
-        cells: [],
+        co2s: [],
       };
       data.we0s.push(we0);
       we0Map.set(we0.name, we0);
+    } else if (recordType === 'K') {
+      const we0 = we0Map.get(String(row[colWe0Name] || ''));
+      if (we0) {
+        const co2Name = String(row[colCo2Name] || '');
+        if (co2Name) we0.co2s.push({ name: co2Name, cells: [] });
+      }
     } else if (recordType === 'C') {
       const we0 = we0Map.get(String(row[colWe0Name] || ''));
       if (we0) {
-        const destStr = String(row[colDestinations] || '');
-        const destinations = destStr
-          ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
-          : [];
-        we0.cells.push({
-          filename: String(row[colFilename] || ''),
-          password: String(row[colPassword] || ''),
-          description: String(row[colDescription] || ''),
-          destinations,
-        });
+        const co2Name = String(row[colCo2Name] || '');
+        const co2 = we0.co2s.find(c => c.name === co2Name);
+        if (co2) {
+          const destStr = String(row[colDestinations] || '');
+          const destinations = destStr
+            ? destStr.split(';').map(decodeDest).filter(d => d.storageType)
+            : [];
+          co2.cells.push({
+            filename: String(row[colFilename] || ''),
+            password: String(row[colPassword] || ''),
+            description: String(row[colDescription] || ''),
+            destinations,
+          });
+        }
       }
     }
   }
@@ -355,15 +411,27 @@ export function mergeData(existing: AppData, imported: AppData): AppData {
   for (const imp of imported.we0s) {
     const existingWe0 = we0Map.get(imp.name);
     if (existingWe0) {
-      const cellFilenames = new Set(existingWe0.cells.map(c => c.filename));
-      for (const cell of imp.cells) {
-        if (!cellFilenames.has(cell.filename)) {
-          existingWe0.cells.push(cell);
-          cellFilenames.add(cell.filename);
+      const co2Map = new Map<string, AppData['we0s'][number]['co2s'][number]>();
+      for (const c of existingWe0.co2s) co2Map.set(c.name, c);
+
+      for (const impCo2 of imp.co2s) {
+        const existingCo2 = co2Map.get(impCo2.name);
+        if (existingCo2) {
+          const cellFilenames = new Set(existingCo2.cells.map(c => c.filename));
+          for (const cell of impCo2.cells) {
+            if (!cellFilenames.has(cell.filename)) {
+              existingCo2.cells.push(cell);
+              cellFilenames.add(cell.filename);
+            }
+          }
+        } else {
+          const newCo2 = { ...impCo2, cells: [...impCo2.cells] };
+          existingWe0.co2s.push(newCo2);
+          co2Map.set(newCo2.name, newCo2);
         }
       }
     } else {
-      merged.we0s.push({ ...imp, cells: [...imp.cells] });
+      merged.we0s.push({ ...imp, co2s: imp.co2s.map(c => ({ ...c, cells: [...c.cells] })) });
       we0Map.set(imp.name, merged.we0s[merged.we0s.length - 1]);
     }
   }
