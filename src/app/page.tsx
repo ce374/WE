@@ -39,7 +39,7 @@ export default function Home() {
   const [fShowPw, setFShowPw] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flashRef = useRef<HTMLInputElement>(null);
 
   // === EFFECTS ===
